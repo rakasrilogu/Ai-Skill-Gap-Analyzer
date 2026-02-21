@@ -118,8 +118,7 @@ def create_pdf(score, job, missing_skills):
     for skill in missing_skills:
         link = RESOURCES.get(skill.lower(), "Search for tutorials online")
         pdf.multi_cell(190, 8, txt=f"- {skill.upper()}: {link}")
-    return bytes(pdf.output())
-
+    return bytes(pdf.output(dest='S'))
 lottie_ani = load_lottie("https://assets2.lottiefiles.com/packages/lf20_p8bfn5to.json")
 
 # -------------------------------
@@ -194,4 +193,5 @@ elif page == "Roadmap":
     else:
         for i, skill in enumerate(m_core + m_sec):
             with st.expander(f"WEEK {i+1}: Master {skill.upper()}"):
+
                 st.write(f"Resource: [Access Here]({RESOURCES.get(skill.lower(), '#')})")
