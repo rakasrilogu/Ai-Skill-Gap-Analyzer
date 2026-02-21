@@ -1,7 +1,6 @@
-
 streamlit
 pandas
 requests
-fpdf
+fpdf2
 streamlit-lottie
 pypdf
