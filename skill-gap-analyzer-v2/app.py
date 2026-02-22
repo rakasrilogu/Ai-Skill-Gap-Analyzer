@@ -1,197 +1,209 @@
 import streamlit as st
-import pandas as pd
-import requests
-from fpdf import FPDF
-from streamlit_lottie import st_lottie
-from pypdf import PdfReader
+from google import genai
+import fitz  # PyMuPDF
+import json
 
-# -------------------------------
-# 1. Sidebar Controls (Theme Toggle)
-# -------------------------------
-st.sidebar.title("App Settings")
-dark_mode = st.sidebar.toggle("🌙 Dark Mode")
+# --- CONFIGURATION ---
+st.set_page_config(page_title="SkillBridge Pro AI", page_icon="🎯", layout="wide")
 
-# -------------------------------
-# 2. Page Config & Dynamic Theme CSS
-# -------------------------------
-st.set_page_config(page_title="Skill Gap Analyzer v2", layout="wide")
+# API Setup
+# Replace with your actual API Key
+API_KEY = "Api key"
+client = genai.Client(api_key=API_KEY)
 
-# Theme Variables
-bg_opacity = "0.8" if dark_mode else "0.75"
-glass_color = "rgba(15, 15, 15, " + bg_opacity + ")" if dark_mode else "rgba(255, 255, 255, " + bg_opacity + ")"
-text_color = "#FFFFFF" if dark_mode else "#000000"
-border_color = "rgba(255, 255, 255, 0.1)" if dark_mode else "rgba(255, 255, 255, 0.4)"
+# --- GLOBAL CUSTOM CSS ---
+st.markdown("""
+    <style>
+    /* Global Dark Theme */
+    .stApp { background: #0f172a; color: #ffffff !important; }
+    h1, h2, h3, p, label, span, .stMarkdown { color: #ffffff !important; font-weight: 500; }
+    
+    /* SIDEBAR STYLING */
+    [data-testid="stSidebar"] h1 { color: #a78bfa !important; font-size: 24px !important; }
+    section[data-testid="stSidebar"] { background-color: #1e293b !important; }
 
-st.markdown(f"""
-<style>
-/* HIDE RUNNING STATUS */
-[data-testid="stStatusWidget"], .stStatusWidget, div[data-testid="stStatusWidget"] {{
-    visibility: hidden !important;
-    display: none !important;
-}}
+    /* PAGE 1 ONLY: White Background for File Uploader */
+    .white-upload-container [data-testid="stFileUploadDropzone"] {
+        background-color: #ffffff !important;
+        border: 2px dashed #7c3aed !important;
+        border-radius: 12px;
+    }
+    .white-upload-container [data-testid="stFileUploadDropzone"] div div { color: #4c1d95 !important; font-weight: bold !important; }
+    .white-upload-container [data-testid="stFileUploadDropzone"] button p { color: #000000 !important; }
+    .white-upload-container [data-testid="stFileUploadDropzone"] small { color: #4b5563 !important; }
 
-/* CLEAN HEADER */
-[data-testid="stHeader"] {{ background: rgba(0,0,0,0) !important; }}
-[data-testid="stToolbar"] {{ visibility: hidden !important; }}
+    /* CARD STYLING */
+    .skill-card {
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(124, 58, 237, 0.3);
+        padding: 25px;
+        border-radius: 15px;
+        margin-bottom: 20px;
+    }
 
-/* DYNAMIC BACKGROUND */
-[data-testid="stAppViewContainer"] {{
-    background: url("http://googleusercontent.com/image_collection/image_retrieval/6490322677960104988_0");
-    background-size: cover;
-    background-position: center;
-    background-attachment: fixed;
-}}
+    /* BUTTONS */
+    .stButton>button {
+        width: 100%;
+        background: linear-gradient(90deg, #4f46e5, #7c3aed) !important;
+        color: white !important;
+        border-radius: 10px !important;
+        height: 3.5em;
+        border: none !important;
+        font-weight: bold;
+        font-size: 16px;
+    }
 
-/* DYNAMIC GLASS CONTAINER */
-.main .block-container {{
-    background: {glass_color}; 
-    backdrop-filter: blur(40px);
-    -webkit-backdrop-filter: blur(40px);
-    border-radius: 30px;
-    padding: 5rem;
-    margin-top: 2rem;
-    border: 1px solid {border_color};
-    box-shadow: 0 15px 35px 0 rgba(0, 0, 0, 0.6);
-}}
+    /* DOWNLOAD BUTTON FIX (Violet/White contrast) */
+    .stDownloadButton button {
+        background: #ffffff !important;
+        color: #7c3aed !important;
+        border: 2px solid #7c3aed !important;
+        font-weight: bold !important;
+        width: auto !important;
+        padding: 0px 30px !important;
+    }
 
-/* DYNAMIC TEXT COLOR */
-h1, h2, h3, p, span, label, li, .stMarkdown, .stTable td, .stTable th, [data-testid="stMetricLabel"] {{
-    color: {text_color} !important;
-    font-weight: 600 !important;
-}}
-
-/* BUTTON STYLING */
-.stButton>button {{
-    background: #00ffd5;
-    color: #000000 !important;
-    font-weight: bold;
-    border-radius: 12px;
-    border: none;
-    width: 100%;
-    padding: 15px;
-    transition: 0.3s;
-}}
-</style>
+    /* EXPANDER STYLING (Dark with Violet Glow) */
+    .streamlit-expanderHeader {
+        background-color: rgba(124, 58, 237, 0.1) !important;
+        color: white !important;
+        border-radius: 8px;
+        border: 1px solid rgba(124, 58, 237, 0.2);
+    }
+    
+    /* LINK COLORING */
+    a { color: #38bdf8 !important; text-decoration: underline !important; }
+    </style>
 """, unsafe_allow_html=True)
 
-# -------------------------------
-# 3. Database & Logic
-# -------------------------------
-RESOURCES = {
-    "java": "https://docs.oracle.com/en/java/",
-    "spring boot": "https://spring.io/projects/spring-boot",
-    "rest api": "https://restfulapi.net/",
-    "sql": "https://www.w3schools.com/sql/",
-    "python": "https://docs.python.org/3/",
-    "machine learning": "https://www.coursera.org/learn/machine-learning",
-    "aws": "https://aws.amazon.com/training/",
-    "docker": "https://docs.docker.com/get-started/"
-}
+# --- HELPER FUNCTIONS ---
+def extract_text_from_pdf(uploaded_file):
+    if uploaded_file:
+        try:
+            doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+            return "".join([page.get_text() for page in doc])
+        except Exception as e:
+            st.error(f"Error reading PDF: {e}")
+    return ""
 
-job_database = {
-    "Backend Developer": {"core": ["java", "spring boot", "rest api", "sql"], "secondary": ["docker", "aws"]},
-    "Data Scientist": {"core": ["python", "machine learning", "statistics"], "secondary": ["pandas", "numpy"]},
-    "Cloud Engineer": {"core": ["aws", "ec2", "s3"], "secondary": ["docker", "devops"]}
-}
+# --- NAVIGATION SIDEBAR ---
+with st.sidebar:
+    st.title("🚀 SkillBridge AI")
+    st.markdown("---")
+    page = st.radio(
+        "NAVIGATION MENU", 
+        ["1. Dashboard Home", "2. Skill Analysis", "3. Export Strategy"],
+        captions=["Upload Profile", "View Insights", "Download Roadmap"]
+    )
 
-@st.cache_data
-def load_lottie(url):
-    try: return requests.get(url).json()
-    except: return None
+# Session state initialization
+if 'analysis_data' not in st.session_state:
+    st.session_state.analysis_data = None
 
-def extract_text_from_pdf(file):
-    reader = PdfReader(file)
-    return " ".join([page.extract_text() for page in reader.pages]).lower()
-
-def create_pdf(score, job, missing_skills):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Helvetica", 'B', 16)
-    pdf.cell(190, 10, txt="Skill Gap Analysis Report", ln=True, align='C')
-    pdf.set_font("Helvetica", size=12)
-    pdf.ln(10)
-    pdf.cell(190, 10, txt=f"Target Role: {job} | Readiness: {score}%", ln=True)
-    pdf.ln(10)
-    pdf.set_font("Helvetica", 'B', 14)
-    pdf.cell(190, 10, txt="Priority Roadmap:", ln=True)
-    pdf.set_font("Helvetica", size=10)
-    for skill in missing_skills:
-        link = RESOURCES.get(skill.lower(), "Search for tutorials online")
-        pdf.multi_cell(190, 8, txt=f"- {skill.upper()}: {link}")
-    return bytes(pdf.output(dest='S'))
-lottie_ani = load_lottie("https://assets2.lottiefiles.com/packages/lf20_p8bfn5to.json")
-
-# -------------------------------
-# 4. Navigation
-# -------------------------------
-st.sidebar.title("Navigation")
-page = st.sidebar.radio("Go to:", ["Dashboard", "Skill Analysis", "Roadmap"])
-
-# -------------------------------
-# 5. Dashboard (Centered)
-# -------------------------------
-if page == "Dashboard":
-    _, center_col, _ = st.columns([1, 6, 1])
-    with center_col:
-        st.markdown("<h1 style='text-align: center; font-size: 3rem;'>🧠 AI Skill Analyzer</h1>", unsafe_allow_html=True)
-        st.markdown("<h3 style='text-align: center;'>Bridge the gap between your resume and your dream job.</h3>", unsafe_allow_html=True)
+# --- PAGE 1: DASHBOARD HOME ---
+if page == "1. Dashboard Home":
+    st.title("🎯 Analysis Center")
+    col1, col2 = st.columns(2, gap="large")
+    
+    with col1:
+        st.markdown('<div class="skill-card">', unsafe_allow_html=True)
+        st.subheader("📁 Profile Upload")
+        # Apply white background class here
+        st.markdown('<div class="white-upload-container">', unsafe_allow_html=True)
+        res_file = st.file_uploader("Upload Resume (PDF ONLY)")
+        st.markdown('</div>', unsafe_allow_html=True)
+        skills_input = st.text_area("Manual Skills Entry:", height=100, placeholder="e.g. Python, SQL, Docker...")
+        st.markdown('</div>', unsafe_allow_html=True)
         
-        c1, c2, c3 = st.columns([1, 2, 1])
+    with col2:
+        st.markdown('<div class="skill-card">', unsafe_allow_html=True)
+        st.subheader("💼 Job Details")
+        job_input = st.text_area("Paste Job Description:", height=275, placeholder="Paste the full job requirements...")
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    if st.button("EXECUTE AI ANALYSIS"):
+        if not job_input:
+            st.error("Please provide a Job Description.")
+        else:
+            with st.spinner("Gemini 2.5 is building your roadmap..."):
+                resume_text = extract_text_from_pdf(res_file)
+                profile_context = f"Resume: {resume_text} | Additional Skills: {skills_input}"
+                
+                # Strict prompt for JSON and Clickable Markdown Links
+                prompt = f"""
+                Compare Profile: {profile_context} vs Job: {job_input}. 
+                Return ONLY valid JSON: 
+                {{
+                  "score": 0-100, 
+                  "matched": ["list"], 
+                  "missing": ["list"], 
+                  "roadmap": {{
+                    "Week 1": "Master [Skill] with [Course Name](URL)", 
+                    "Week 2": "Learn [Skill] with [Course Name](URL)", 
+                    "Week 3": "Practice [Skill] with [Course Name](URL)", 
+                    "Week 4": "Certify in [Skill] with [Course Name](URL)"
+                  }}
+                }}
+                CRITICAL: You MUST provide real, clickable Markdown links for every week in the roadmap.
+                """
+                
+                try:
+                    response = client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
+                    raw_json = response.text.replace("```json", "").replace("```", "").strip()
+                    st.session_state.analysis_data = json.loads(raw_json)
+                    st.success("Analysis Complete! Open 'Skill Analysis' to view.")
+                    st.balloons()
+                except Exception as e:
+                    st.error(f"Analysis Failed. Ensure your API key is active.")
+
+# --- PAGE 2: SKILL ANALYSIS ---
+elif page == "2. Skill Analysis":
+    st.title("🧠 Skill Intelligence")
+    if st.session_state.analysis_data:
+        data = st.session_state.analysis_data
+        st.metric("Compatibility Score", f"{data['score']}%")
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            st.success("✅ Matched Competencies")
+            for s in data['matched']: st.write(f"- {s}")
         with c2:
-            if lottie_ani:
-                st_lottie(lottie_ani, height=250, key="dash")
-            if st.button("🚀 Start Analysis"):
-                st.info("👈 Use the sidebar to go to 'Skill Analysis'!")
-
-# -------------------------------
-# 6. Analysis
-# -------------------------------
-elif page == "Skill Analysis":
-    st.title("🔍 Gap Analysis")
-    role = st.selectbox("Target Job Role", list(job_database.keys()))
-    
-    uploaded_file = st.file_uploader("Upload Resume (PDF)", type="pdf")
-    user_input = st.text_area("Or enter skills manually", "")
-
-    if st.button("Analyze My Skills"):
-        resume_text = extract_text_from_pdf(uploaded_file) if uploaded_file else ""
-        full_text = resume_text + " " + user_input.lower()
-        
-        db = job_database[role]
-        m_core = [s for s in db["core"] if s not in full_text]
-        m_sec = [s for s in db["secondary"] if s not in full_text]
-        
-        found_core = len(db["core"]) - len(m_core)
-        score = int((found_core / len(db["core"])) * 100)
-        
-        st.session_state['m_core'], st.session_state['m_sec'] = m_core, m_sec
-        
-        st.markdown(f"### Skill Match: {score}%")
-        st.progress(score / 100)
-        
-        st.table(pd.DataFrame({
-            "Priority": ["🔴 Missing Core", "🟡 Missing Secondary"],
-            "Skills": [", ".join(m_core).upper() if m_core else "✓ Complete", 
-                       ", ".join(m_sec).upper() if m_sec else "✓ Complete"]
-        }))
-        
-        pdf = create_pdf(score, role, m_core + m_sec)
-        st.download_button("📥 Download Report", pdf, "Gap_Analysis.pdf", "application/pdf")
-
-# -------------------------------
-# 7. Roadmap
-# -------------------------------
-elif page == "Roadmap":
-    st.title("📅 Learning Roadmap")
-    m_core = st.session_state.get('m_core', [])
-    m_sec = st.session_state.get('m_sec', [])
-    
-    if not (m_core or m_sec) and 'm_core' not in st.session_state:
-        st.warning("Please run the analysis first!")
-    elif not m_core and not m_sec:
-        st.success("You're fully ready! Keep polishing your projects.")
+            st.warning("🚨 Identified Skill Gaps")
+            for s in data['missing']: st.write(f"- {s}")
     else:
-        for i, skill in enumerate(m_core + m_sec):
-            with st.expander(f"WEEK {i+1}: Master {skill.upper()}"):
+        st.info("⚠️ No analysis data found. Please run the analysis on the Home page.")
 
-                st.write(f"Resource: [Access Here]({RESOURCES.get(skill.lower(), '#')})")
+# --- PAGE 3: EXPORT STRATEGY ---
+elif page == "3. Export Strategy":
+    st.title("📥 Career Strategy & Roadmap")
+    if st.session_state.analysis_data:
+        data = st.session_state.analysis_data
+        
+        # Roadmap with Expanders
+        st.subheader("📅 Your 4-Week Learning Roadmap")
+        for wk, plan in data['roadmap'].items():
+            with st.expander(f"📖 {wk.upper()}"):
+                st.markdown(plan) # Clickable links show up here
+        
+        st.divider()
+        
+        # Save Report Section
+        st.subheader("💾 Save Your Strategy")
+        st.markdown('<div class="skill-card">', unsafe_allow_html=True)
+        st.write("Generate a text version of your gaps and learning path.")
+        
+        report_txt = f"SKILLBRIDGE CAREER REPORT\nScore: {data['score']}%\n\n"
+        report_txt += "MISSING SKILLS:\n" + ", ".join(data['missing']) + "\n\n"
+        report_txt += "ROADMAP:\n"
+        for wk, plan in data['roadmap'].items():
+            report_txt += f"{wk}: {plan}\n"
+
+        st.download_button(
+            label="📥 DOWNLOAD REPORT (TXT)",
+            data=report_txt,
+            file_name="SkillBridge_Strategy.txt",
+            mime="text/plain"
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        st.info("⚠️ Please complete the analysis on Page 1 to generate your roadmap.")
