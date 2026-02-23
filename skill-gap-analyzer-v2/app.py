@@ -8,7 +8,7 @@ st.set_page_config(page_title="SkillBridge Pro AI", page_icon="🎯", layout="wi
 
 # API Setup
 # Replace with your actual API Key
-API_KEY = "Api key"
+API_KEY = st.secrets["GEMINI_API_KEY"]
 client = genai.Client(api_key=API_KEY)
 
 # --- GLOBAL CUSTOM CSS ---
@@ -207,3 +207,4 @@ elif page == "3. Export Strategy":
         st.markdown('</div>', unsafe_allow_html=True)
     else:
         st.info("⚠️ Please complete the analysis on Page 1 to generate your roadmap.")
+
