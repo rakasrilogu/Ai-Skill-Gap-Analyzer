@@ -1,0 +1,36 @@
+.hero-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 80vh;
+}
+
+.glass-card {
+    background: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(15px);
+    padding: 50px;
+    border-radius: 20px;
+    text-align: center;
+    width: 60%;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.glass-card h1 {
+    color: white;
+    font-size: 40px;
+}
+
+.glass-card p {
+    color: #d1d1ff;
+    font-size: 18px;
+}
+
+.primary-btn {
+    background: linear-gradient(45deg, #8e2de2, #4a00e0);
+    color: white;
+    padding: 12px 25px;
+    border-radius: 30px;
+    border: none;
+    font-size: 16px;
+    cursor: pointer;
+}
