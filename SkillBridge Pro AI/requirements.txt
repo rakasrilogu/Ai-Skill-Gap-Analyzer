@@ -1,6 +1,0 @@
-google-genai
-streamlit
-pypdf2
-reportlab
-SpeechRecognition
-pyaudio
