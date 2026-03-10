@@ -5,8 +5,7 @@ import time
 import io
 import json
 import re
-from google.genai.errors import ClientError
-from config import client
+from ai_engine import gemini_call, parse_json, evaluate_answer
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib import colors
@@ -15,62 +14,6 @@ from reportlab.lib.units import mm
 from reportlab.graphics.shapes import Drawing, Rect
 
 
-# ─────────────────────────────────────────────
-# GENERATE QUESTIONS FROM SKILLS
-# ─────────────────────────────────────────────
-def generate_questions(matched_skills, missing_skills):
-    prompt = f"""
-You are a senior technical interviewer. Generate exactly 5 smart interview questions
-based on the candidate's matched and missing skills.
-
-Return ONLY valid JSON — no markdown, no extra text.
-
-Format:
-{{
-    "mock_questions": [
-        "Question 1?",
-        "Question 2?",
-        "Question 3?",
-        "Question 4?",
-        "Question 5?"
-    ]
-}}
-
-Rules:
-- Mix questions from both matched skills (test depth) and missing skills (test awareness)
-- Questions must be practical and role-specific
-- No yes/no questions
-
-Matched Skills: {json.dumps(matched_skills)}
-Missing Skills: {json.dumps(missing_skills)}
-"""
-    for attempt in range(3):
-        try:
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-            )
-            raw = response.text.strip()
-            raw = re.sub(r"```(?:json)?", "", raw).strip().replace("```", "").strip()
-            start = raw.find("{")
-            end = raw.rfind("}") + 1
-            if start == -1 or end == 0:
-                return None, "AI did not return valid JSON."
-            data = json.loads(raw[start:end])
-            return data.get("mock_questions", []), None
-        except ClientError as e:
-            if "429" in str(e):
-                wait = (attempt + 1) * 30
-                st.warning(f"⏳ Quota exceeded. Retrying in {wait} seconds...")
-                time.sleep(wait)
-            else:
-                return None, str(e)
-    return None, "Quota exhausted. Please try again later."
-
-
-# ─────────────────────────────────────────────
-# VOICE FUNCTION
-# ─────────────────────────────────────────────
 def record_voice():
     recognizer = sr.Recognizer()
     recognizer.pause_threshold = 2.0
@@ -90,56 +33,6 @@ def record_voice():
         return "No speech detected. Please try again."
 
 
-# ─────────────────────────────────────────────
-# AI EVALUATION
-# ─────────────────────────────────────────────
-def evaluate_answer(question, answer):
-    prompt = f"""
-    You are a senior technical interviewer. Give structured, honest, and motivating feedback.
-
-    Question: {question}
-    Candidate Answer: {answer}
-
-    Respond in this exact format:
-
-    Score: X/10
-    Technical Accuracy: Good / Average / Poor
-    Communication Quality: Good / Average / Poor
-
-    What You Did Well:
-    (1-2 lines)
-
-    Ideal Answer (Key Points):
-    - point 1
-    - point 2
-    - point 3
-
-    How To Improve:
-    - tip 1
-    - tip 2
-
-    Keep total response under 200 words. Be encouraging but honest.
-    """
-    for attempt in range(3):
-        try:
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt
-            )
-            return response.text
-        except ClientError as e:
-            if "429" in str(e):
-                wait_time = (attempt + 1) * 15
-                st.warning(f"⏳ Rate limit hit. Retrying in {wait_time}s... (Attempt {attempt+1}/3)")
-                time.sleep(wait_time)
-            else:
-                raise
-    return "Could not evaluate — Gemini API quota exceeded."
-
-
-# ─────────────────────────────────────────────
-# HELPERS
-# ─────────────────────────────────────────────
 def extract_score(evaluation_text):
     match = re.search(r'Score[:\s]+(\d+)\s*/\s*10', evaluation_text, re.IGNORECASE)
     return int(match.group(1)) if match else None
@@ -155,9 +48,6 @@ def calculate_grade(evaluations):
     return grade, round(avg, 1)
 
 
-# ─────────────────────────────────────────────
-# PDF SCORE BAR
-# ─────────────────────────────────────────────
 def make_score_bar(score, max_score=10, width=120*mm, height=6*mm):
     d = Drawing(width, height)
     d.add(Rect(0, 0, width, height, fillColor=colors.HexColor('#E5E7EB'), strokeColor=None))
@@ -169,9 +59,6 @@ def make_score_bar(score, max_score=10, width=120*mm, height=6*mm):
     return d
 
 
-# ─────────────────────────────────────────────
-# BUILD PDF REPORT
-# ─────────────────────────────────────────────
 def build_pdf_report(result, questions, evaluations, candidate_name, job_role):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -208,14 +95,12 @@ def build_pdf_report(result, questions, evaluations, candidate_name, job_role):
     story = []
     grade, avg_score = calculate_grade(evaluations)
 
-    # ── HEADER ──
     story.append(Paragraph("SkillBridge AI", title_s))
     story.append(Paragraph("AI Mock Interview Evaluation Report", subtitle_s))
     story.append(Spacer(1, 3*mm))
     story.append(HRFlowable(width="100%", thickness=2.5, color=PURPLE))
     story.append(Spacer(1, 5*mm))
 
-    # ── CANDIDATE INFO ──
     info_data = [
         ["Candidate Name", candidate_name or "Not provided",  "Report Date", datetime.now().strftime('%d %b %Y')],
         ["Target Job Role", job_role or "Not provided",       "Report Time", datetime.now().strftime('%I:%M %p')],
@@ -240,7 +125,6 @@ def build_pdf_report(result, questions, evaluations, candidate_name, job_role):
     story.append(info_table)
     story.append(Spacer(1, 6*mm))
 
-    # ── COMPATIBILITY SCORE ──
     story.append(Paragraph("Compatibility Score", section_s))
     compat_score = result.get('compatibility_score', 0)
     try:
@@ -257,7 +141,6 @@ def build_pdf_report(result, questions, evaluations, candidate_name, job_role):
     story.append(compat_table)
     story.append(Spacer(1, 6*mm))
 
-    # ── OVERALL GRADE ──
     story.append(Paragraph("Overall Interview Performance", section_s))
     grade_color = GREEN if grade == 'A' else PURPLE if grade == 'B' else colors.HexColor('#F59E0B') if grade == 'C' else RED
     grade_data = [[
@@ -279,7 +162,6 @@ def build_pdf_report(result, questions, evaluations, candidate_name, job_role):
     story.append(grade_table)
     story.append(Spacer(1, 6*mm))
 
-    # ── SKILLS TABLE ──
     matched = result.get('matched_skills', [])
     missing = result.get('missing_skills', [])
     story.append(Paragraph("Skills Analysis", section_s))
@@ -308,7 +190,6 @@ def build_pdf_report(result, questions, evaluations, candidate_name, job_role):
     story.append(skills_table)
     story.append(Spacer(1, 6*mm))
 
-    # ── SCORE CHART ──
     if evaluations:
         story.append(Paragraph("Score Per Question", section_s))
         chart_data = [["Question", "Score", "Visual"]]
@@ -334,7 +215,6 @@ def build_pdf_report(result, questions, evaluations, candidate_name, job_role):
         story.append(chart_table)
         story.append(Spacer(1, 6*mm))
 
-    # ── DETAILED Q&A ──
     story.append(HRFlowable(width="100%", thickness=1.5, color=PURPLE))
     story.append(Spacer(1, 4*mm))
     story.append(Paragraph("Detailed Interview Evaluation", section_s))
@@ -372,7 +252,6 @@ def build_pdf_report(result, questions, evaluations, candidate_name, job_role):
         block.append(Spacer(1, 3*mm))
         story.append(KeepTogether(block))
 
-    # ── ROADMAP IN PDF (from session_state["roadmap"]) ──────────────────────
     roadmap = st.session_state.get("roadmap", [])
     if roadmap:
         story.append(HRFlowable(width="100%", thickness=1.5, color=PURPLE))
@@ -385,11 +264,11 @@ def build_pdf_report(result, questions, evaluations, candidate_name, job_role):
             Paragraph("<b>Description</b>", style('RH3', fontSize=9, fontName='Helvetica-Bold', textColor=WHITE)),
         ]]
         for item in roadmap:
-            desc = item.get('description', '')
+            desc_style2 = style('RD2', fontSize=9, fontName='Helvetica', textColor=DARK, leading=13, wordWrap='CJK')
             roadmap_data.append([
-                Paragraph(item.get('week', ''), desc_style),
-                Paragraph(item.get('skill', ''), desc_style),
-                Paragraph(desc, desc_style),
+                Paragraph(item.get('week', ''), desc_style2),
+                Paragraph(item.get('skill', ''), desc_style2),
+                Paragraph(item.get('description', ''), desc_style2),
             ])
         roadmap_table = Table(roadmap_data, colWidths=[22*mm, 48*mm, 104*mm])
         roadmap_table.setStyle(TableStyle([
@@ -407,7 +286,6 @@ def build_pdf_report(result, questions, evaluations, candidate_name, job_role):
         story.append(roadmap_table)
         story.append(Spacer(1, 6*mm))
 
-    # ── FINAL SUMMARY ──
     story.append(HRFlowable(width="100%", thickness=2, color=PURPLE))
     story.append(Spacer(1, 4*mm))
     story.append(Paragraph(
@@ -422,14 +300,10 @@ def build_pdf_report(result, questions, evaluations, candidate_name, job_role):
     return buffer.getvalue()
 
 
-# ─────────────────────────────────────────────
-# MAIN FUNCTION
-# ─────────────────────────────────────────────
 def show_mock_interview():
 
     st.markdown("<h2 style='color:#1A1A2E;'>🎤 AI Smart Mock Interview</h2>", unsafe_allow_html=True)
 
-    # ── Guard ───────────────────────────────────────────────────────────────
     if "result" not in st.session_state:
         st.warning("⚠️ Run Resume Analysis first.")
         return
@@ -438,14 +312,31 @@ def show_mock_interview():
     matched_skills = result.get("matched_skills", [])
     missing_skills = result.get("missing_skills", [])
 
-    # ── Generate questions once, cache in session_state["mock_questions"] ───
     if "mock_questions" not in st.session_state:
         with st.spinner("🤖 Generating interview questions based on your skills..."):
-            questions, error = generate_questions(matched_skills, missing_skills)
-            if error:
-                st.error(f"❌ {error}")
+            prompt = f"""
+You are a senior technical interviewer. Generate exactly 5 smart interview questions
+based on the candidate's matched and missing skills.
+
+Return ONLY valid JSON — no markdown, no extra text.
+
+Format:
+{{
+    "mock_questions": ["Q1?", "Q2?", "Q3?", "Q4?", "Q5?"]
+}}
+
+Matched Skills: {json.dumps(matched_skills)}
+Missing Skills: {json.dumps(missing_skills)}
+"""
+            raw, err = gemini_call(prompt)
+            if err:
+                st.error(f"❌ {err}")
                 return
-            st.session_state["mock_questions"] = questions
+            data, err = parse_json(raw)
+            if err:
+                st.error(f"❌ {err}")
+                return
+            st.session_state["mock_questions"] = data.get("mock_questions", [])
 
     questions = st.session_state.get("mock_questions", [])
 
@@ -456,11 +347,9 @@ def show_mock_interview():
             st.rerun()
         return
 
-    # ── Top metrics ─────────────────────────────────────────────────────────
     st.metric("Compatibility Score", f"{result.get('compatibility_score', 'N/A')}%")
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Candidate info for PDF ───────────────────────────────────────────────
     with st.expander("👤 Enter Your Info for PDF Report", expanded=False):
         candidate_name = st.text_input("Your Name", placeholder="e.g. Rakasri L", key="candidate_name")
         job_role       = st.text_input("Target Job Role", placeholder="e.g. Backend Developer", key="job_role")
@@ -475,9 +364,7 @@ def show_mock_interview():
     if "evaluations" not in st.session_state:
         st.session_state["evaluations"] = {}
 
-    # ── Questions Loop ───────────────────────────────────────────────────────
     for i, question in enumerate(questions, start=1):
-
         st.markdown(f"""
         <div style='background:rgba(255,255,255,0.6);backdrop-filter:blur(12px);
             -webkit-backdrop-filter:blur(12px);border:1px solid rgba(108,99,255,0.18);
@@ -489,8 +376,7 @@ def show_mock_interview():
         </div>
         """, unsafe_allow_html=True)
 
-        mode = st.radio("Answer Mode", ["Type Answer", "Voice Answer"],
-                        key=f"mode_{i}", horizontal=True)
+        mode = st.radio("Answer Mode", ["Type Answer", "Voice Answer"], key=f"mode_{i}", horizontal=True)
         user_answer = ""
 
         if mode == "Type Answer":
@@ -536,7 +422,6 @@ def show_mock_interview():
 
     st.divider()
 
-    # ── SUMMARY ─────────────────────────────────────────────────────────────
     evaluated_count  = len(st.session_state.get("evaluations", {}))
     grade, avg_score = calculate_grade(st.session_state.get("evaluations", {}))
 
@@ -546,11 +431,10 @@ def show_mock_interview():
     col_c.metric("Overall Grade", grade)
 
     if evaluated_count < len(questions):
-        st.warning(f"⚠️ {len(questions) - evaluated_count} question(s) not yet evaluated — will show as 'Not attempted' in report.")
+        st.warning(f"⚠️ {len(questions) - evaluated_count} question(s) not yet evaluated.")
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── DOWNLOAD PDF ─────────────────────────────────────────────────────────
     cname = st.session_state.get("candidate_name", "")
     jrole = st.session_state.get("job_role", "")
 
@@ -561,3 +445,9 @@ def show_mock_interview():
         "application/pdf",
         use_container_width=True
     )
+    
+
+    
+
+    
+
