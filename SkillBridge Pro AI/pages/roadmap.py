@@ -1,13 +1,26 @@
 import streamlit as st
 import json
-import time
-import re
-from config import client
-from google.genai import errors
+from ai_engine import gemini_call, parse_json
 
 
-def generate_roadmap(missing_skills):
-    prompt = f"""
+def show_roadmap():
+
+    st.markdown("<h2 style='color:#1A1A2E;'>📅 4-Week Learning Roadmap</h2>", unsafe_allow_html=True)
+
+    if "result" not in st.session_state:
+        st.warning("⚠️ Run Resume Analysis first.")
+        return
+
+    result = st.session_state["result"]
+    missing_skills = result.get("missing_skills", [])
+
+    if not missing_skills:
+        st.success("✅ No missing skills found! Your profile is already a great match.")
+        return
+
+    if "roadmap" not in st.session_state:
+        with st.spinner("🔍 Generating your personalized learning roadmap..."):
+            prompt = f"""
 You are an expert career coach. Create a week-by-week learning roadmap for these missing skills.
 Return ONLY valid JSON — no extra text, no markdown, no explanation.
 
@@ -31,54 +44,15 @@ Rules:
 Missing Skills:
 {json.dumps(missing_skills)}
 """
-    for attempt in range(3):
-        try:
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-            )
-            raw = response.text.strip()
-            raw = re.sub(r"```(?:json)?", "", raw).strip().replace("```", "").strip()
-            start = raw.find("{")
-            end = raw.rfind("}") + 1
-            if start == -1 or end == 0:
-                return None, "AI did not return valid JSON."
-            data = json.loads(raw[start:end])
-            return data.get("roadmap", []), None
-        except errors.ClientError as e:
-            if "429" in str(e):
-                wait = (attempt + 1) * 30
-                st.warning(f"⏳ Quota exceeded. Retrying in {wait} seconds...")
-                time.sleep(wait)
-            else:
-                return None, str(e)
-    return None, "Quota exhausted. Please try again later."
-
-
-def show_roadmap():
-
-    st.markdown("<h2 style='color:#1A1A2E;'>📅 4-Week Learning Roadmap</h2>", unsafe_allow_html=True)
-
-    # ── Guard ───────────────────────────────────────────────────────────────
-    if "result" not in st.session_state:
-        st.warning("⚠️ Run Resume Analysis first.")
-        return
-
-    result = st.session_state["result"]
-    missing_skills = result.get("missing_skills", [])
-
-    if not missing_skills:
-        st.success("✅ No missing skills found! Your profile is already a great match.")
-        return
-
-    # ── Generate roadmap once, cache in session_state["roadmap"] ────────────
-    if "roadmap" not in st.session_state:
-        with st.spinner("🔍 Generating your personalized learning roadmap..."):
-            roadmap, error = generate_roadmap(missing_skills)
-            if error:
-                st.error(f"❌ {error}")
+            raw, err = gemini_call(prompt)
+            if err:
+                st.error(f"❌ {err}")
                 return
-            st.session_state["roadmap"] = roadmap
+            data, err = parse_json(raw)
+            if err:
+                st.error(f"❌ {err}")
+                return
+            st.session_state["roadmap"] = data.get("roadmap", [])
 
     roadmap = st.session_state.get("roadmap", [])
 
@@ -86,7 +60,6 @@ def show_roadmap():
         st.error("❌ Could not generate roadmap. Please try again.")
         return
 
-    # ── Display ─────────────────────────────────────────────────────────────
     for item in roadmap:
         if not isinstance(item, dict):
             continue
@@ -123,7 +96,6 @@ def show_roadmap():
         </div>
         """, unsafe_allow_html=True)
 
-    # ── Regenerate ──────────────────────────────────────────────────────────
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("🔄 Regenerate Roadmap", use_container_width=True):
         del st.session_state["roadmap"]
