@@ -1,5 +1,0 @@
-google-genai
-streamlit
-PyMuPDF
-reportlab
-SpeechRecognition
