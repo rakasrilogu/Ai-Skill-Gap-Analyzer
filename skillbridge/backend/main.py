@@ -4,6 +4,7 @@ load_dotenv()
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 import io
 import os
@@ -63,7 +64,7 @@ async def analyze_resume_endpoint(
     resume_text = extract_text_from_bytes(contents)
     if not resume_text.strip():
         raise HTTPException(status_code=400, detail="Could not extract text from PDF.")
-    result, err = analyze_resume(resume_text, job_description)
+    result, err = await run_in_threadpool(analyze_resume, resume_text, job_description)
     if err:
         raise HTTPException(status_code=500, detail=err)
     return result
@@ -72,14 +73,14 @@ async def analyze_resume_endpoint(
 async def generate_roadmap_endpoint(req: RoadmapRequest):
     if not req.missing_skills:
         raise HTTPException(status_code=400, detail="No missing skills provided.")
-    roadmap, err = generate_roadmap(req.missing_skills)
+    roadmap, err = await run_in_threadpool(generate_roadmap, req.missing_skills)
     if err:
         raise HTTPException(status_code=500, detail=err)
     return {"roadmap": roadmap}
 
 @app.post("/api/generate-questions")
 async def generate_questions_endpoint(req: QuestionsRequest):
-    questions, err = generate_questions(req.matched_skills, req.missing_skills)
+    questions, err = await run_in_threadpool(generate_questions, req.matched_skills, req.missing_skills)
     if err:
         raise HTTPException(status_code=500, detail=err)
     return {"questions": questions}
@@ -110,11 +111,3 @@ async def generate_report_endpoint(req: ReportRequest):
         media_type="application/pdf",
         headers={"Content-Disposition": "attachment; filename=SkillBridge_Report.pdf"},
     )
-
-
-
-
-
-
-
-    
