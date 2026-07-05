@@ -1,8 +1,7 @@
-
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { RadialBarChart, RadialBar, PolarAngleAxis, ResponsiveContainer } from 'recharts';
-import { analyzeResume } from '../utils/api';
+import { analyzeResume, generateRoadmap, generateQuestions } from '../utils/api';
 import { useAppState } from '../hooks/useAppState';
 
 function ScoreGauge({ score }) {
@@ -47,6 +46,7 @@ export default function ResumeAnalysisPage() {
   const [resumeFile, setResumeFile] = useState(null);
   const [jobDesc, setJobDesc] = useState('');
   const [loading, setLoading] = useState(false);
+  const [loadingStage, setLoadingStage] = useState('');
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
   const [dragOver, setDragOver] = useState(false);
@@ -58,6 +58,7 @@ export default function ResumeAnalysisPage() {
     }
     setError('');
     setLoading(true);
+    setLoadingStage('Analyzing your resume against the job description...');
     try {
       const data = await analyzeResume(resumeFile, jobDesc);
       setResult(data);
@@ -65,10 +66,24 @@ export default function ResumeAnalysisPage() {
       setRoadmap(null);
       setMockQuestions(null);
       setEvaluations({});
+
+      // Generate roadmap + mock questions in parallel with each other,
+      // but stay in the loading state until BOTH finish. This way the
+      // user only ever sees one loading screen — by the time they land
+      // on the Roadmap or Mock Interview pages, everything is ready
+      // and neither page shows its own spinner.
+      setLoadingStage('Preparing your learning roadmap and interview questions...');
+      const [roadmapData, questionsData] = await Promise.all([
+        generateRoadmap(data.missing_skills).catch(() => null),
+        generateQuestions(data.matched_skills, data.missing_skills).catch(() => null),
+      ]);
+      if (roadmapData) setRoadmap(roadmapData);
+      if (questionsData) setMockQuestions(questionsData);
     } catch (err) {
       setError(err.response?.data?.detail || err.message || 'Analysis failed. Please try again.');
     } finally {
       setLoading(false);
+      setLoadingStage('');
     }
   }
 
@@ -174,7 +189,7 @@ export default function ResumeAnalysisPage() {
       {loading && (
         <div className="spinner-wrap">
           <div className="spinner" />
-          <div style={{ color: 'var(--gray)', fontSize: 14 }}>Gemini AI is analyzing your resume...</div>
+          <div style={{ color: 'var(--gray)', fontSize: 14 }}>{loadingStage || 'Gemini AI is analyzing your resume...'}</div>
         </div>
       )}
 
