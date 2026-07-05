@@ -167,7 +167,7 @@ export default function ResumeAnalysisPage() {
         disabled={loading || !resumeFile || !jobDesc.trim()}
         style={{ fontSize: 16, padding: '14px', marginBottom: 36 }}
       >
-        {loading ? '🔍 Analyzing...' : '🚀 Run AI Analysis'}
+        {loading ? ' Analyzing...' : ' Run AI Analysis'}
       </button>
 
       {loading && (
@@ -254,7 +254,7 @@ export default function ResumeAnalysisPage() {
             border: '1.5px solid var(--purple-border)',
           }}>
             <div style={{ fontWeight: 700, color: 'var(--purple-dark)', fontSize: 15, marginBottom: 16 }}>
-              🎯 What's Next?
+               What's Next?
             </div>
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
               <button className="btn btn-primary" onClick={() => navigate('/roadmap')}>
