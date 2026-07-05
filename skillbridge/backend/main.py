@@ -8,6 +8,7 @@ from pydantic import BaseModel
 import io
 import os
 from typing import Optional
+from concurrent.futures import ThreadPoolExecutor
 from ai_engine import (
     analyze_resume,
     generate_roadmap,
@@ -52,21 +53,48 @@ class ReportRequest(BaseModel):
 async def health():
     return {"status": "ok"}
 
+# UPDATED ENDPOINT
 @app.post("/api/analyze-resume")
 async def analyze_resume_endpoint(
     resume: UploadFile = File(...),
     job_description: str = Form(...),
 ):
     if not resume.filename.endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+        raise HTTPException(
+            status_code=400,
+            detail="Only PDF files are supported."
+        )
+
     contents = await resume.read()
+
     resume_text = extract_text_from_bytes(contents)
+
     if not resume_text.strip():
-        raise HTTPException(status_code=400, detail="Could not extract text from PDF.")
-    result, err = analyze_resume(resume_text, job_description)
+        raise HTTPException(
+            status_code=400,
+            detail="Could not extract text from PDF."
+        )
+
+    # STEP 1: Analyze Resume
+    result, err = analyze_resume(
+        resume_text,
+        job_description
+    )
+
     if err:
-        raise HTTPException(status_code=500, detail=err)
-    return result
+        raise HTTPException(
+            status_code=500,
+            detail=err
+        )
+
+    matched_skills = result.get("matched_skills", [])
+    missing_skills = result.get("missing_skills", [])
+
+    return {
+        "analysis": result,
+        "matched_skills": matched_skills,
+        "missing_skills": missing_skills
+    }
 
 @app.post("/api/generate-roadmap")
 async def generate_roadmap_endpoint(req: RoadmapRequest):
